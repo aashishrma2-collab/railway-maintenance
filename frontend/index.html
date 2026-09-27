@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Railway Maintenance Optimization</title>
+<style>
+:root{--navy:#0b2545;--navy2:#13315c;--red:#c0392b;--amber:#e67e22;--green:#1e8449;--bg:#f4f6f9;--card:#fff;--txt:#1c2530;--muted:#6b7684;--border:#e1e6ec}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt)}
+.topbar{background:var(--navy);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
+.badge-role{background:var(--red);font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px}
+nav{display:flex;gap:4px;overflow-x:auto;background:var(--navy2);padding:0 8px}
+nav button{background:none;border:none;color:#cdd9ea;padding:10px 12px;font-size:13px;cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent}
+nav button.active{color:#fff;border-bottom:3px solid var(--red)}
+.wrap{max-width:900px;margin:0 auto;padding:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center}
+.stat .n{font-size:22px;font-weight:700;color:var(--navy)}
+.stat .l{font-size:11px;color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--border)}
+th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;color:#fff}
+.b-high{background:var(--red)}.b-med{background:var(--amber)}.b-low{background:#95a5a6}
+.b-ok{background:var(--green)}.b-bad{background:var(--red)}.b-pending{background:#7f8c8d}
+input,select,button{font-family:inherit;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:6px;width:100%}
+button.act{background:var(--navy);color:#fff;border:none;cursor:pointer;width:auto;padding:9px 16px}
+button.act.red{background:var(--red)}button.act.green{background:var(--green)}
+label{font-size:12px;color:var(--muted);display:block;margin:8px 0 3px}
+h2{font-size:16px;margin:0 0 10px}h3{font-size:13px;margin:0 0 6px;color:var(--navy)}
+.timeline{border-left:3px solid var(--navy);padding-left:12px;margin:10px 0}
+.tl-step{margin-bottom:8px;font-size:13px}.tl-step b{color:var(--navy)}
+.reasons{font-size:12px;color:var(--muted);margin-top:4px}
+.note{background:#fff8e6;border:1px solid #f0d98c;padding:8px 10px;border-radius:6px;font-size:12px;color:#6b5300;margin-bottom:10px}
+.err{color:var(--red);font-size:12px}
+#errbar{display:none;position:fixed;bottom:0;left:0;right:0;background:#c0392b;color:#fff;padding:10px;font-size:12px;font-family:monospace;z-index:999;max-height:30vh;overflow:auto}
+</style>
+</head>
+<body>
+<div id="app"><div style="padding:40px;text-align:center;color:#6b7684">Loading…</div></div>
+<div id="errbar"></div>
+<script>
+const API = ''; // same-origin: backend serves this file, so relative /api/* paths work anywhere it's deployed
+let token=null, me=null, view='login';
+let CACHE={tasks:[],equipment:[],recs:[],summary:{}};
+
+function showErr(m){ const b=document.getElementById('errbar'); b.style.display='block'; b.innerHTML+='<div>'+m+'</div>'; }
+window.onerror=(m,s,l)=>{ showErr('JS error: '+m+' (line '+l+')'); };
+
+async function api(path, opts={}){
+  const headers = opts.headers || {};
+  headers['Content-Type']='application/json';
+  if(token) headers['Authorization']='Bearer '+token;
+  const res = await fetch(API+path, {...opts, headers});
+  if(!res.ok){ const t=await res.text(); throw new Error(res.status+': '+t); }
+  return res.status===204? null : res.json();
+}
+
+async function boot(){
+  token = localStorage.getItem('rw_token');
+  if(token){
+    try{ me = await api('/api/auth/me'); view='dashboard'; }
+    catch(e){ token=null; localStorage.removeItem('rw_token'); view='login'; }
+  }
+  render();
+}
+
+async function doLogin(username,password){
+  try{
+    const r = await api('/api/auth/login', {method:'POST', body: JSON.stringify({username,password})});
+    token=r.access_token; localStorage.setItem('rw_token', token);
+    me = await api('/api/auth/me'); view='dashboard'; render();
+  }catch(e){ showErr('Login failed: '+e.message); alert('Login failed: check username/password.'); }
+}
+async function doRegister(username,password,role,department,zone){
+  try{
+    const r = await api('/api/auth/register', {method:'POST', body: JSON.stringify({username,password,role,department,zone})});
+    token=r.access_token; localStorage.setItem('rw_token', token);
+    me = await api('/api/auth/me'); view='dashboard'; render();
+  }catch(e){ showErr('Register failed: '+e.message); alert('Register failed: '+e.message); }
+}
+function logout(){ token=null; me=null; localStorage.removeItem('rw_token'); view='login'; render(); }
+
+async function loadAll(){
+  try{
+    CACHE.tasks = await api('/api/tasks');
+    CACHE.equipment = await api('/api/equipment');
+    CACHE.recs = await api('/api/recommendations');
+    CACHE.summary = await api('/api/dashboard/summary');
+  }catch(e){ showErr('Load failed: '+e.message); }
+}
+
+function badge(p){ const c=p==='High'?'b-high':p==='Medium'?'b-med':'b-low'; return `<span class="badge ${c}">${p}</span>`; }
+function fmtTime(s){ return s; }
+
+function render(){
+  const el=document.getElementById('app');
+  if(view==='login'){ el.innerHTML=loginView(); attachLogin(); return; }
+  loadAll().then(()=>{
+    el.innerHTML = topbar()+navbar()+'<div class="wrap">'+pageBody()+'</div>';
+    attachHandlers();
+  });
+}
+
+function topbar(){
+  return `<div class="topbar"><b>🚆 Railway Maintenance Optimization</b>
+   <div>${me?me.username+' <span class="badge-role">'+me.role+'</span> <button id="logoutBtn" class="act red" style="width:auto;padding:5px 10px;margin-left:8px">Logout</button>':''}</div></div>`;
+}
+function navbar(){
+  const items=[['dashboard','Dashboard'],['tasks','Tasks'],['corridor','Corridor & Feasibility'],['approvals','Approvals']];
+  return '<nav>'+items.map(([k,l])=>`<button data-nav="${k}" class="${view===k?'active':''}">${l}</button>`).join('')+'</nav>';
+}
+
+function loginView(){
+  return `<div style="max-width:380px;margin:60px auto;padding:20px"><div class="card">
+  <h2>🚆 Railway Maintenance — Sign in</h2>
+  <div class="note">Demo auth: passwords are bcrypt-hashed server-side (see backend/app/auth.py). Try admin / admin123.</div>
+  <label>Username</label><input id="lu">
+  <label>Password</label><input id="lp" type="password">
+  <label>Role (for new registrations)</label><select id="lr">
+   <option>Engineering</option><option>S&T</option><option>Electrical</option>
+   <option>Operations</option><option>Planner</option><option>Officer</option><option>Admin</option>
+  </select>
+  <label>Department/Zone (optional)</label><input id="ld" placeholder="e.g. Northern Railway">
+  <div style="margin-top:12px;display:flex;gap:8px">
+   <button class="act" id="loginBtn" style="flex:1">Login</button>
+   <button class="act" id="registerBtn" style="flex:1;background:var(--green)">Register</button>
+  </div></div></div>`;
+}
+function attachLogin(){
+  document.getElementById('loginBtn').onclick=()=>doLogin(val('lu'),val('lp'));
+  document.getElementById('registerBtn').onclick=()=>doRegister(val('lu'),val('lp'),val('lr'),val('ld'),val('ld'));
+}
+function val(id){ return document.getElementById(id).value; }
+
+function pageBody(){
+  if(view==='dashboard') return dashboardView();
+  if(view==='tasks') return tasksView();
+  if(view==='corridor') return corridorView();
+  if(view==='feasresult') return feasResultView();
+  if(view==='approvals') return approvalsView();
+  return '';
+}
+
+function dashboardView(){
+  const s=CACHE.summary;
+  return `<h2>Operations Dashboard</h2><div class="grid">
+   <div class="stat"><div class="n">${s.total_tasks??0}</div><div class="l">Total Tasks</div></div>
+   <div class="stat"><div class="n">${s.high_priority??0}</div><div class="l">High Priority</div></div>
+   <div class="stat"><div class="n">${s.overdue??0}</div><div class="l">Overdue</div></div>
+   <div class="stat"><div class="n">${s.equipment_available??0}</div><div class="l">Equipment Available</div></div>
+   <div class="stat"><div class="n">${s.pending_approval??0}</div><div class="l">Pending Approval</div></div>
+  </div><div class="card" style="margin-top:12px"><h3>Recent Tasks</h3>${taskTable(CACHE.tasks.slice(0,6))}</div>`;
+}
+function taskTable(list){
+  if(!list.length) return '<div class="err">No tasks yet.</div>';
+  return `<table><tr><th>Task</th><th>KM</th><th>Priority</th><th>Dept</th><th>Risk</th></tr>`+
+   list.map(t=>`<tr><td>${t.title}</td><td>${t.km}</td><td>${badge(t.priority)}</td><td>${t.department}</td><td>${t.risk_score}</td></tr>`).join('')+'</table>';
+}
+
+const canAddTask = ()=> me && me.role!=='Operations';
+const canDecide = ()=> me && ['Planner','Officer','Admin'].includes(me.role);
+const canRunFeas = ()=> me && ['Planner','Officer','Admin'].includes(me.role);
+
+function tasksView(){
+  return `<h2>Maintenance Tasks</h2><div class="card">${taskTableFull()}</div>
+  ${canAddTask()?`<div class="card"><h3>Add Task</h3>
+   <label>Title</label><input id="f_title">
+   <label>Location (KM)</label><input id="f_km" type="number">
+   <label>Priority</label><select id="f_pri"><option>High</option><option>Medium</option><option>Low</option></select>
+   <label>Department</label><select id="f_dept"><option>Engineering</option><option>S&T</option><option>Electrical</option></select>
+   <label>Work Duration (minutes)</label><input id="f_dur" type="number" value="60">
+   <label>Overdue Days</label><input id="f_overdue" type="number" value="0">
+   <div style="margin-top:10px"><button class="act" id="addTaskBtn">Add Task</button></div>
+  </div>`:''}`;
+}
+function taskTableFull(){
+  if(!CACHE.tasks.length) return '<div class="err">No tasks yet.</div>';
+  return `<table><tr><th>Task</th><th>KM</th><th>Priority</th><th>Dept</th><th>Risk</th><th>Why</th><th>Status</th></tr>`+
+   CACHE.tasks.map(t=>`<tr><td>${t.title}</td><td>${t.km}</td><td>${badge(t.priority)}</td><td>${t.department}</td>
+   <td><b>${t.risk_score}</b></td><td class="reasons">${(t.risk_reasons||[]).map(x=>'✓ '+x).join('<br>')}</td><td>${t.status}</td></tr>`).join('')+'</table>';
+}
+
+function corridorView(){
+  const opts = CACHE.tasks.filter(t=>t.status==='Pending').map(t=>`<option value="${t.id}">${t.title} (KM ${t.km})</option>`).join('');
+  return `<h2>Corridor Discovery & Feasibility</h2>
+  <div class="note">Selects an anchor task, searches ±20 KM for compatible pending tasks, then runs the real backend mobilization/backward-scheduling feasibility check for each (see backend/app/feasibility.py). Proximity alone never bundles tasks.</div>
+  ${canRunFeas() ? `<div class="card"><label>Anchor Task</label><select id="anchorSel">${opts}</select>
+   <div style="margin-top:10px"><button class="act" id="runFeasBtn">Run Corridor Discovery + Feasibility</button></div></div>`
+   : `<div class="card err">Only Planner/Officer/Admin roles can run this.</div>`}`;
+}
+
+let lastFeas=null;
+async function runFeas(anchorId){
+  try{
+    const r = await api('/api/corridor/feasibility', {method:'POST', body: JSON.stringify({anchor_task_id: Number(anchorId)})});
+    lastFeas = r; view='feasresult'; render();
+  }catch(e){ showErr('Feasibility run failed: '+e.message); }
+}
+function feasResultView(){
+  if(!lastFeas) return '<div class="err">No result. Run feasibility first.</div>';
+  const r=lastFeas;
+  return `<h2>Feasibility Results (Recommendation #${r.recommendation_id})</h2>
+  <div class="note">Start time ${r.start_time} · Block window ${r.block_window_min} min</div>
+  ${r.results.map(x=>`<div class="card"><h3>${x.task_title} (KM ${x.km}) — <span class="badge ${x.feasible?'b-ok':'b-bad'}">${x.feasible?'FEASIBLE':'NOT FEASIBLE'}</span></h3>
+   ${x.feasible?`<div class="timeline">
+     <div class="tl-step"><b>Depot departure:</b> ${x.mobilization.depot_departure} (${x.mobilization.equipment_name})</div>
+     <div class="tl-step"><b>Site arrival:</b> ${x.mobilization.site_arrival}</div>
+     <div class="tl-step"><b>Maintenance start:</b> ${x.mobilization.maintenance_start}</div>
+     <div class="tl-step"><b>Clearance complete:</b> ${x.mobilization.clearance_complete}</div>
+    </div><div class="reasons">${(x.reasons||[]).map(z=>'✓ '+z).join('<br>')}</div>`
+    :`<div class="err">${x.reason}</div>`}</div>`).join('')}
+  <div class="card">Saved to the Approvals queue as Recommendation #${r.recommendation_id}.</div>`;
+}
+
+function approvalsView(){
+  if(!CACHE.recs.length) return '<h2>Approvals</h2><div class="card">No recommendations yet. Run Corridor & Feasibility first.</div>';
+  return `<h2>Approval Queue</h2>`+CACHE.recs.map(r=>{
+    const feasibleTitles = r.results.filter(x=>x.feasible).map(x=>x.task_title).join(', ') || 'none feasible';
+    return `<div class="card"><h3>Recommendation #${r.id} <span class="badge ${r.status==='Approved'?'b-ok':r.status==='Rejected'?'b-bad':'b-pending'}">${r.status}</span></h3>
+    <div>Start: ${r.start_time} | Feasible tasks: ${feasibleTitles}</div>
+    ${canDecide() && r.status==='Pending Approval' ? `<div style="margin-top:8px;display:flex;gap:8px">
+      <button class="act green" style="width:auto" data-approve="${r.id}">Approve</button>
+      <button class="act red" style="width:auto" data-reject="${r.id}">Reject</button></div>`:''}</div>`;
+  }).join('');
+}
+
+function attachHandlers(){
+  document.getElementById('logoutBtn')?.addEventListener('click', logout);
+  document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=()=>{view=b.dataset.nav; render();});
+  document.getElementById('addTaskBtn')?.addEventListener('click', async ()=>{
+    try{
+      await api('/api/tasks', {method:'POST', body: JSON.stringify({
+        title: val('f_title'), km: Number(val('f_km')), priority: val('f_pri'),
+        department: val('f_dept'), duration_min: Number(val('f_dur')), overdue_days: Number(val('f_overdue'))
+      })});
+      view='tasks'; render();
+    }catch(e){ showErr('Add task failed: '+e.message); }
+  });
+  document.getElementById('runFeasBtn')?.addEventListener('click', ()=>runFeas(document.getElementById('anchorSel').value));
+  document.querySelectorAll('[data-approve]').forEach(b=>b.onclick=async()=>{
+    await api('/api/recommendations/'+b.dataset.approve+'/approve', {method:'POST', body:'{}'}); render();
+  });
+  document.querySelectorAll('[data-reject]').forEach(b=>b.onclick=async()=>{
+    await api('/api/recommendations/'+b.dataset.reject+'/reject', {method:'POST', body:'{}'}); render();
+  });
+}
+
+boot();
+</script>
+</body>
+</html>
