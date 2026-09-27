@@ -1,5 +1,7 @@
 import os
 
+os.makedirs("./data", exist_ok=True)
+
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/railway.db")
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-change-me-in-production")
 JWT_ALGO = "HS256"
